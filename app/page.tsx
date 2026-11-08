@@ -1,11 +1,11 @@
-"use client";
-
+ "use client";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type Sticker = { id: string; name: string; rarity: string; image_url: string };
 type Profile = { id: string; username: string; role: string };
 type BoardRow = { username: string; total: number; legendary: number };
+type ViewerRow = { username: string; sticker_id: string; sticker_name: string; rarity: string; image_url: string; collected_at: string };
 
 export default function Home() {
   const [sessionUser, setSessionUser] = useState<any>(null);
@@ -21,13 +21,44 @@ export default function Home() {
   const [inventory, setInventory] = useState<Sticker[]>([]);
   const [pity, setPity] = useState(0);
 
+  const [viewerRows, setViewerRows] = useState<ViewerRow[]>([]);
+  const [viewerStickers, setViewerStickers] = useState<Sticker[]>([]);
+  const [selectedViewer, setSelectedViewer] = useState("");
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerMessage, setViewerMessage] = useState("");
+
+  async function loadViewer() {
+    setViewerLoading(true); setViewerMessage("");
+    const [{ data: rows, error: rowsError }, { data: stickers, error: stickersError }] = await Promise.all([
+      supabase.rpc("viewer_list_collections"), supabase.rpc("viewer_list_stickers")
+    ]);
+    if (rowsError || stickersError) {
+      setViewerMessage(rowsError?.message || stickersError?.message || "Could not load viewer.");
+      setViewerRows([]); setViewerStickers([]);
+    } else {
+      const safeRows = (rows || []) as ViewerRow[];
+      setViewerRows(safeRows); setViewerStickers((stickers || []) as Sticker[]);
+      setSelectedViewer(current => current || safeRows[0]?.username || "");
+    }
+    setViewerLoading(false);
+  }
+
   async function loadProfile(userId: string) {
     const { data } = await supabase.from("profiles").select("id,username,role").eq("id", userId).single();
-    if (data) { setProfile(data); setUsername(data.username); }
+    if (data) {
+      setProfile(data); setUsername(data.username);
+      if (data.role === "admin" || data.role === "tester") await loadViewer();
+      else { setViewerRows([]); setViewerStickers([]); setSelectedViewer(""); }
+      return data as Profile;
+    }
+    return null;
   }
+
   async function refresh() {
     const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) { setSessionUser(null); setProfile(null); return; }
+    if (!auth.user) {
+      setSessionUser(null); setProfile(null); setViewerRows([]); setViewerStickers([]); setSelectedViewer(""); return;
+    }
     setSessionUser(auth.user);
     await loadProfile(auth.user.id);
     const [{ data: inv }, { data: stats }] = await Promise.all([
@@ -37,10 +68,12 @@ export default function Home() {
     setInventory((inv || []).map((x: any) => x.stickers).filter(Boolean));
     setPity(stats?.pity_count || 0);
   }
+
   async function refreshBoard() {
     const { data } = await supabase.from("leaderboard").select("username,total,legendary").order("total", { ascending: false }).limit(25);
     setBoard((data || []) as BoardRow[]);
   }
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       if (data.session?.user) { setSessionUser(data.session.user); loadProfile(data.session.user.id); refresh(); }
@@ -55,20 +88,19 @@ export default function Home() {
     setBusy(true); setMessage("");
     const clean = username.trim().toLowerCase();
     if (!/^[a-z0-9_]{3,18}$/.test(clean)) { setMessage("Username must be 3–18 characters: letters, numbers or underscore."); setBusy(false); return; }
-    // Username login is implemented as a private email alias; no real email is collected.
     const email = `${clean}@login.stickerrush.com`;
     const result = isRegister
       ? await supabase.auth.signUp({ email, password, options: { data: { username: clean } } })
       : await supabase.auth.signInWithPassword({ email, password });
     if (result.error) setMessage(result.error.message);
     else if (result.data.user) {
-      setSessionUser(result.data.user);
-      await loadProfile(result.data.user.id);
+      setSessionUser(result.data.user); await loadProfile(result.data.user.id);
       setMessage(isRegister ? "Account created! Welcome to Sticker Rush." : "Welcome back!");
       await refresh();
     }
     setBusy(false);
   }
+
   async function spin() {
     if (busy || spinning) return;
     setBusy(true); setSpinning(true); setLastDrop(null); setMessage("");
@@ -76,13 +108,15 @@ export default function Home() {
     if (error) { setMessage(error.message); setSpinning(false); setBusy(false); return; }
     const result = data as any;
     setTimeout(async () => {
-      setLastDrop(result.sticker);
-      setPity(result.pity_count);
-      await refresh(); await refreshBoard();
-      setSpinning(false); setBusy(false);
+      setLastDrop(result.sticker); setPity(result.pity_count);
+      await refresh(); await refreshBoard(); setSpinning(false); setBusy(false);
     }, 2300);
   }
-  async function logout() { await supabase.auth.signOut(); setSessionUser(null); setProfile(null); setInventory([]); setLastDrop(null); }
+
+  async function logout() {
+    await supabase.auth.signOut(); setSessionUser(null); setProfile(null); setInventory([]); setLastDrop(null);
+    setViewerRows([]); setViewerStickers([]); setSelectedViewer("");
+  }
 
   const next = pity >= 49 ? "GUARANTEED LEGENDARY" : (pity + 1) % 10 === 0 ? "10% LEGENDARY BOOST" : `${50 - pity} spins until guarantee`;
   const counts = useMemo(() => ({
@@ -90,6 +124,9 @@ export default function Home() {
     epic: inventory.filter(s => s.rarity === "epic").length,
     legendary: inventory.filter(s => s.rarity === "legendary").length
   }), [inventory]);
+  const viewerPlayers = useMemo(() => Array.from(new Set(viewerRows.map(row => row.username))).sort((a,b) => a.localeCompare(b)), [viewerRows]);
+  const selectedRows = useMemo(() => viewerRows.filter(row => row.username === selectedViewer), [viewerRows, selectedViewer]);
+  const canView = profile?.role === "admin" || profile?.role === "tester";
 
   return <main className="shell">
     <header className="top"><a className="brand" href="#">✦ STICKER RUSH</a><span className="live">● LIVE GAME</span></header>
@@ -102,7 +139,8 @@ export default function Home() {
       <button className="primary full" disabled={busy || password.length < 8} onClick={authenticate}>{busy ? "PLEASE WAIT…" : isRegister ? "CREATE PLAYER ACCOUNT →" : "LOG IN →"}</button>
       {message && <p className="notice">{message}</p>}
       <p className="tiny">Username is public on the leaderboard. Never reuse an important password.</p>
-    </section> : <><section className="welcome"><div><div className="eyebrow">WELCOME BACK</div><h1>{profile?.username || username}</h1><p className="muted">Your collection is waiting.</p></div><div className="actions">{profile?.role === "admin" && <a className="adminLink" href="/admin">ADMIN PANEL ↗</a>}<button className="ghost" onClick={logout}>LOG OUT</button></div></section>
+    </section> : <>
+      <section className="welcome"><div><div className="eyebrow">WELCOME BACK</div><h1>{profile?.username || username}</h1><p className="muted">Your collection is waiting.</p></div><div className="actions">{profile?.role === "admin" && <a className="adminLink" href="/admin">ADMIN PANEL ↗</a>}<button className="ghost" onClick={logout}>LOG OUT</button></div></section>
       <section className="gameGrid">
         <div className="panel wheelPanel">
           <div className="eyebrow">THE SUMMONING WHEEL</div><h2>One spin. One sticker.</h2>
@@ -117,6 +155,34 @@ export default function Home() {
           <div className="panel"><div className="eyebrow">YOUR COLLECTION</div><div className="stats"><div><b>{inventory.length}</b><span>TOTAL</span></div><div><b>{counts.rare}</b><span>RARE</span></div><div><b>{counts.epic}</b><span>EPIC</span></div><div><b>{counts.legendary}</b><span>LEGENDARY</span></div></div><div className="miniInventory">{inventory.slice(0,8).map((s,i)=><img key={i} src={s.image_url} title={`${s.name} (${s.rarity})`} alt={s.name}/>)}</div></div>
         </div>
       </section>
+
+      {canView && <section className="panel" style={{marginTop:24}}>
+        <div className="leaderHead"><div><div className="eyebrow">READ-ONLY ACCESS · {profile?.role.toUpperCase()}</div><h2>🔎 Collection Viewer</h2><p className="muted">Browse player collections and the full sticker catalogue. Viewing only — no spin, edit or delete controls.</p></div><button className="ghost" onClick={loadViewer} disabled={viewerLoading}>{viewerLoading ? "LOADING…" : "↻ REFRESH"}</button></div>
+        {viewerMessage && <p className="notice">{viewerMessage}</p>}
+        {viewerLoading && <p className="muted">Loading collections and stickers…</p>}
+        {!viewerLoading && <>
+          <h3>PLAYER COLLECTIONS</h3>
+          {viewerPlayers.length ? <>
+            <label htmlFor="viewer-player">SELECT A PLAYER</label>
+            <select id="viewer-player" value={selectedViewer} onChange={e => setSelectedViewer(e.target.value)} style={{display:"block",width:"100%",maxWidth:420,margin:"10px 0 18px",padding:12,borderRadius:10}}>
+              {viewerPlayers.map(player => <option key={player} value={player}>{player}</option>)}
+            </select>
+            <p className="muted">{selectedRows.length} collected sticker{selectedRows.length === 1 ? "" : "s"} for {selectedViewer}.</p>
+            {selectedRows.length ? <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(125px,1fr))",gap:12}}>
+              {selectedRows.map((row,index) => <div className={`drop ${row.rarity}`} key={`${row.sticker_id}-${index}`} style={{padding:10,borderRadius:12,textAlign:"center"}}>
+                <img src={row.image_url} alt={row.sticker_name} style={{width:"100%",maxWidth:130,aspectRatio:"1/1",objectFit:"contain"}}/><b>{row.sticker_name}</b><div><small>{row.rarity.toUpperCase()}</small></div><small>{new Date(row.collected_at).toLocaleDateString()}</small>
+              </div>)}
+            </div> : <p className="muted">This player has not collected any stickers yet.</p>}
+          </> : <p className="muted">No player collections yet.</p>}
+          <div style={{marginTop:28}}><div className="eyebrow">COMPLETE STICKER CATALOGUE</div><h3>ALL STICKERS ({viewerStickers.length})</h3>
+            {viewerStickers.length ? <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(125px,1fr))",gap:12}}>
+              {viewerStickers.map(sticker => <div className={`drop ${sticker.rarity}`} key={sticker.id} style={{padding:10,borderRadius:12,textAlign:"center"}}>
+                <img src={sticker.image_url} alt={sticker.name} style={{width:"100%",maxWidth:130,aspectRatio:"1/1",objectFit:"contain"}}/><b>{sticker.name}</b><div><small>{sticker.rarity.toUpperCase()}</small></div>
+              </div>)}
+            </div> : <p className="muted">No stickers are in the catalogue yet.</p>}
+          </div>
+        </>}
+      </section>}
     </>}
     <section className="panel leaderboard"><div className="leaderHead"><div><div className="eyebrow">THE GLOBAL RANKINGS</div><h2>🏆 Top collectors</h2></div><span className="live">● UPDATING LIVE</span></div>
       {board.length ? <div className="board">{board.map((p,i)=><div className="boardRow" key={p.username}><span className="rank">{String(i+1).padStart(2,"0")}</span><b>{p.username}</b><span className="legendCount">✦ {p.legendary} legendary</span><strong>{p.total} <small>stickers</small></strong></div>)}</div> : <p className="muted">The leaderboard will appear when the first players collect stickers.</p>}
