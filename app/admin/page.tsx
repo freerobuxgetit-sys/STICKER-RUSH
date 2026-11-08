@@ -84,21 +84,36 @@ export default function Admin() {
   }
 
   async function changeBan(username: string, banned: boolean) {
-    const { error } = await supabase.rpc("admin_set_ban", {
-      target_username: username,
-      ban_status: banned,
+    const { data: { session }, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError || !session) {
+      setMsg("Please log in again.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/ban", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ username, banned }),
     });
 
-    if (error) {
-      setMsg(error.message);
+    const result = await response.json();
+
+    if (!response.ok) {
+      setMsg(result.error || "Ban operation failed.");
       return;
     }
 
     setMsg(
       banned
-        ? `${username} has been banned from collecting.`
+        ? `${username} has been banned.`
         : `${username} has been unbanned.`
     );
+
     await load();
   }
 
