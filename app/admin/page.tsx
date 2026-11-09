@@ -22,7 +22,6 @@ export default function Admin() {
 
   async function load() {
     setLoading(true);
-
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
@@ -33,10 +32,7 @@ export default function Admin() {
     }
 
     const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single();
+      .from("profiles").select("role").eq("id", user.id).single();
 
     if (profileError || profile?.role !== "admin") {
       setMsg("Access denied. This account is not an admin.");
@@ -46,11 +42,8 @@ export default function Admin() {
     }
 
     setAllowed(true);
-
     const { data: stickers, error: stickerError } = await supabase
-      .from("stickers")
-      .select("*")
-      .order("created_at", { ascending: false });
+      .from("stickers").select("*").order("created_at", { ascending: false });
 
     if (stickerError) setMsg(stickerError.message);
     else setItems(stickers || []);
@@ -60,25 +53,16 @@ export default function Admin() {
 
     if (playerError) setMsg(playerError.message);
     else setPlayers(playerData || []);
-
     setLoading(false);
   }
 
-  useEffect(() => {
-    void load();
-  }, []);
+  useEffect(() => { void load(); }, []);
 
   async function changeRole(username: string, role: string) {
     const { error } = await supabase.rpc("admin_set_role", {
-      target_username: username,
-      new_role: role,
+      target_username: username, new_role: role,
     });
-
-    if (error) {
-      setMsg(error.message);
-      return;
-    }
-
+    if (error) { setMsg(error.message); return; }
     setMsg(`${username} is now ${role}.`);
     await load();
   }
@@ -86,11 +70,7 @@ export default function Admin() {
   async function changeBan(username: string, banned: boolean) {
     const { data: { session }, error: sessionError } =
       await supabase.auth.getSession();
-
-    if (sessionError || !session) {
-      setMsg("Please log in again.");
-      return;
-    }
+    if (sessionError || !session) { setMsg("Please log in again."); return; }
 
     const response = await fetch("/api/admin/ban", {
       method: "POST",
@@ -100,61 +80,29 @@ export default function Admin() {
       },
       body: JSON.stringify({ username, banned }),
     });
-
     const result = await response.json();
+    if (!response.ok) { setMsg(result.error || "Ban operation failed."); return; }
 
-    if (!response.ok) {
-      setMsg(result.error || "Ban operation failed.");
-      return;
-    }
-
-    setMsg(
-      banned
-        ? `${username} has been banned.`
-        : `${username} has been unbanned.`
-    );
-
+    setMsg(banned ? `${username} has been banned.` : `${username} has been unbanned.`);
     await load();
   }
 
   async function upload() {
-    if (!file || !name.trim()) {
-      setMsg("Add a sticker name and image.");
-      return;
-    }
-
+    if (!file || !name.trim()) { setMsg("Add a sticker name and image."); return; }
     setMsg("Uploading…");
 
     const ext = file.name.split(".").pop()?.toLowerCase() || "png";
     const path = `${crypto.randomUUID()}.${ext}`;
-
-    const { error: upErr } = await supabase.storage
-      .from("stickers")
-      .upload(path, file, {
-        upsert: false,
-        contentType: file.type,
-      });
-
-    if (upErr) {
-      setMsg(upErr.message);
-      return;
-    }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from("stickers")
-      .getPublicUrl(path);
-
-    const { error } = await supabase.from("stickers").insert({
-      name: name.trim(),
-      rarity,
-      image_url: publicUrl,
-      storage_path: path,
+    const { error: upErr } = await supabase.storage.from("stickers").upload(path, file, {
+      upsert: false, contentType: file.type,
     });
+    if (upErr) { setMsg(upErr.message); return; }
 
-    if (error) {
-      setMsg(error.message);
-      return;
-    }
+    const { data: { publicUrl } } = supabase.storage.from("stickers").getPublicUrl(path);
+    const { error } = await supabase.from("stickers").insert({
+      name: name.trim(), rarity, image_url: publicUrl, storage_path: path,
+    });
+    if (error) { setMsg(error.message); return; }
 
     setName("");
     setFile(null);
@@ -164,39 +112,23 @@ export default function Admin() {
 
   async function remove(id: string, path: string) {
     if (!confirm("Delete this sticker?")) return;
-
-    const { error } = await supabase
-      .from("stickers")
-      .delete()
-      .eq("id", id);
-
-    if (error) {
-      setMsg(error.message);
-      return;
-    }
+    const { error } = await supabase.from("stickers").delete().eq("id", id);
+    if (error) { setMsg(error.message); return; }
 
     if (path) {
-      const { error: storageError } = await supabase.storage
-        .from("stickers")
-        .remove([path]);
-
+      const { error: storageError } = await supabase.storage.from("stickers").remove([path]);
       if (storageError) {
         setMsg(`Sticker deleted, but image cleanup failed: ${storageError.message}`);
         await load();
         return;
       }
     }
-
     setMsg("Sticker deleted.");
     await load();
   }
 
   if (loading) {
-    return (
-      <main className="shell">
-        <p>Checking admin access…</p>
-      </main>
-    );
+    return <main className="shell"><p>Checking admin access…</p></main>;
   }
 
   return (
@@ -215,54 +147,28 @@ export default function Admin() {
         ) : (
           <>
             <h2>Player management ({players.length})</h2>
-
             <div className="catalog">
               {players.map((player) => (
                 <div className="catalogItem" key={player.id}>
                   <div>
                     <b>{player.username}</b>
-                    <small>
-                      {player.role.toUpperCase()}
-                      {player.is_banned ? " • BANNED" : ""}
-                    </small>
+                    <small>{player.role.toUpperCase()}{player.is_banned ? " • BANNED" : ""}</small>
                   </div>
-
                   {player.role !== "admin" && (
                     <div>
                       {player.role === "tester" ? (
-                        <button
-                          className="primary"
-                          onClick={() => changeRole(player.username, "player")}
-                        >
-                          MAKE PLAYER
-                        </button>
+                        <button className="primary" onClick={() => changeRole(player.username, "player")}>MAKE PLAYER</button>
                       ) : (
-                        <button
-                          className="primary"
-                          onClick={() => changeRole(player.username, "tester")}
-                        >
-                          MAKE TESTER
-                        </button>
+                        <button className="primary" onClick={() => changeRole(player.username, "tester")}>MAKE TESTER</button>
                       )}
-
                       {player.is_banned ? (
-                        <button
-                          className="primary"
-                          onClick={() => changeBan(player.username, false)}
-                        >
-                          UNBAN
-                        </button>
+                        <button className="primary" onClick={() => changeBan(player.username, false)}>UNBAN</button>
                       ) : (
-                        <button
-                          className="delete"
-                          onClick={() => {
-                            if (confirm(`Ban ${player.username} from collecting stickers?`)) {
-                              void changeBan(player.username, true);
-                            }
-                          }}
-                        >
-                          BAN
-                        </button>
+                        <button className="delete" onClick={() => {
+                          if (confirm(`Ban ${player.username} from collecting stickers?`)) {
+                            void changeBan(player.username, true);
+                          }
+                        }}>BAN</button>
                       )}
                     </div>
                   )}
@@ -271,58 +177,36 @@ export default function Admin() {
             </div>
 
             <p className="notice">{msg}</p>
-
             <h2>Upload a sticker</h2>
-
             <div className="formGrid">
               <label>
                 STICKER NAME
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Golden Dragon"
-                />
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Golden Dragon" />
               </label>
-
               <label>
                 RARITY
                 <select value={rarity} onChange={(e) => setRarity(e.target.value)}>
                   <option value="rare">Rare</option>
                   <option value="epic">Epic</option>
                   <option value="legendary">Legendary</option>
+                  <option value="secret">Secret</option>
                 </select>
               </label>
-
               <label className="fileLabel">
                 IMAGE FILE
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(e) => setFile(e.target.files?.[0] || null)} />
               </label>
             </div>
 
-            <button className="primary" onClick={upload}>
-              ＋ UPLOAD STICKER
-            </button>
-
+            <button className="primary" onClick={upload}>＋ UPLOAD STICKER</button>
             <h2 className="catalogTitle">Sticker catalog ({items.length})</h2>
-
             <div className="catalog">
               {items.map((s) => (
                 <div className="catalogItem" key={s.id}>
                   <img src={s.image_url} alt={s.name} />
-                  <div>
-                    <b>{s.name}</b>
-                    <small className={s.rarity}>{s.rarity}</small>
-                  </div>
-                  <button
-                    className="delete"
-                    onClick={() => remove(s.id, s.storage_path)}
-                  >
-                    DELETE
-                  </button>
+                  <div><b>{s.name}</b><small className={s.rarity}>{s.rarity}</small></div>
+                  <button className="delete" onClick={() => remove(s.id, s.storage_path)}>DELETE</button>
                 </div>
               ))}
             </div>
