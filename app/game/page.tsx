@@ -27,6 +27,13 @@ export default function Home() {
   const [oddsLoading, setOddsLoading] = useState(false);
   const [activeOdds, setActiveOdds] = useState({ rare: 65.5, epic: 33.3, legendary: 1, secret: 0.2 });
   const [customOddsActive, setCustomOddsActive] = useState(false);
+  const [shopPrices, setShopPrices] = useState({ rare: 60, epic: 120, legendary: 240 });
+  const [shopMessage, setShopMessage] = useState("");
+  const [shopBusy, setShopBusy] = useState(false);
+  const [gift, setGift] = useState<any>(null);
+  const [giftMessage, setGiftMessage] = useState("");
+  const [giftBusy, setGiftBusy] = useState(false);
+  const [maxInventoryMessage, setMaxInventoryMessage] = useState("");
 
                           const [viewerRows, setViewerRows] = useState<ViewerRow[]>([]);
                             const [viewerStickers, setViewerStickers] = useState<Sticker[]>([]);
@@ -74,7 +81,7 @@ export default function Home() {
                                                                                                                                                                             } else {
                                                                                                                                                                                   const safeRows = (rows || []) as ViewerRow[];
                                                                                                                                                                                         setViewerRows(safeRows); setViewerStickers((stickers || []) as Sticker[]);
-                                                                                                                                                                                              setSelectedViewer(current => current || safeRows[0]?.username || "");
+                                                                                                                                                                                              setSelectedViewer((current: string) => current || safeRows[0]?.username || "");
                                                                                                                                                                                                   }
                                                                                                                                                                                                       setViewerLoading(false);
                                                                                                                                                                                                         }
@@ -103,6 +110,7 @@ export default function Home() {
                                                                                                                                                                                                                                                                                                     const loadedProfile = await loadProfile(auth.user.id);
                                                                                                                                                                                                                                                                                                         if (!loadedProfile) return;
                                             await loadMyOdds(loadedProfile.role);
+                                             await loadMegaFeatures();
                                                                                                                                                                                                                                                                                                             const [{ data: inv }, { data: stats }] = await Promise.all([
                                                                                                                                                                                                                                                                                                                   supabase.from("collections").select("stickers(id,name,rarity,image_url)").eq("user_id", auth.user.id).order("created_at", { ascending: false }),
                                                                                                                                                                                                                                                                                                                         supabase.from("profiles").select("pity_count,hd_balance").eq("id", auth.user.id).single()
@@ -112,7 +120,45 @@ export default function Home() {
                                                                                                                                                                                                      setHdBalance(stats?.hd_balance || 0);
                                                                                                                                                                                                                                                                                                                                       }
 
-                                                                                                                                                                                                                                                                                                                                        async function loadMyOdds(role = profile?.role, mode = oddsMode) {
+                                                                                                                                                                                                                                                                                                                                        async function loadMegaFeatures() {
+  const [{ data: prices, error: priceError }, { data: giftData, error: giftError }] = await Promise.all([
+    supabase.rpc("get_hd_shop_prices"), supabase.rpc("get_my_hd_gift")
+  ]);
+  if (!priceError && prices) setShopPrices({ rare: Number(prices.rare), epic: Number(prices.epic), legendary: Number(prices.legendary) });
+  if (!giftError) setGift(giftData || null);
+}
+
+async function buyPack(kind: "rare" | "epic" | "legendary") {
+  setShopBusy(true); setShopMessage("Opening your pack…");
+  const { data, error } = await supabase.rpc("buy_hd_pack", { pack_type: kind });
+  setShopBusy(false);
+  if (error) { setShopMessage(error.message); return; }
+  setHdBalance(Number(data.hd_balance));
+  const names = (data.stickers || []).map((s: any) => s.name).join(", ");
+  setShopMessage(`Pack opened! You got: ${names}`);
+  await refresh();
+}
+
+async function claimGift() {
+  if (!gift?.id || gift.claimed) return;
+  setGiftBusy(true); setGiftMessage("Claiming gift…");
+  const { data, error } = await supabase.rpc("claim_my_hd_gift", { gift_id: gift.id });
+  setGiftBusy(false);
+  if (error) { setGiftMessage(error.message); return; }
+  setHdBalance(Number(data.hd_balance));
+  setGift((current: any) => current ? { ...current, claimed: true } : current);
+  setGiftMessage(`Gift claimed! +${data.amount} HD added to your balance.`);
+}
+
+async function maxInventory() {
+  setMaxInventoryMessage("Filling your collection…");
+  const { data, error } = await supabase.rpc("set_my_max_inventory");
+  if (error) { setMaxInventoryMessage(error.message); return; }
+  setMaxInventoryMessage(`Done! Added ${data.added_copies} copies. Each active sticker is now capped at 99.`);
+  await refresh();
+}
+
+async function loadMyOdds(role = profile?.role, mode = oddsMode) {
   const { data, error } = await supabase.rpc("get_my_spin_odds");
   if (error) { setOddsStatus(error.message); return; }
   const own = data?.own_odds;
@@ -246,8 +292,30 @@ async function refreshBoard() {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     </div>
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           </section>
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                {(profile?.role === "admin" || profile?.role === "tester") && <section className="panel" style={{marginTop:24}}>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                {sessionUser && <section className="panel" style={{marginTop:24}}>
+  <div className="eyebrow">💎 HD MARKET</div><h2>Sticker Packs</h2>
+  <p className="muted">Your balance: <b>💎 {hdBalance} HD</b>. Pack contents are random stickers of the selected rarity.</p>
+  <div className="formGrid">
+    <div><b>⚪ Rare Pack</b><p className="muted">3 random Rare stickers · {shopPrices.rare} HD</p><button className="primary" disabled={shopBusy} onClick={() => void buyPack("rare")}>BUY RARE PACK</button></div>
+    <div><b>🟣 Epic Pack</b><p className="muted">3 random Epic stickers · {shopPrices.epic} HD</p><button className="primary" disabled={shopBusy} onClick={() => void buyPack("epic")}>BUY EPIC PACK</button></div>
+    <div><b>🟡 Legendary Pack</b><p className="muted">1 random Legendary sticker · {shopPrices.legendary} HD</p><button className="primary" disabled={shopBusy} onClick={() => void buyPack("legendary")}>BUY LEGENDARY PACK</button></div>
+  </div>
+  {shopMessage && <p className="notice">{shopMessage}</p>}
+</section>}
+
+{sessionUser && gift && <section className="panel" style={{marginTop:24}}>
+  <div className="eyebrow">🎁 OCCASION GIFT BOX</div><h2>{gift.message}</h2>
+  <p className="muted">A gift of <b>💎 {gift.amount} HD</b> is available until {new Date(gift.ends_at).toLocaleString()}.</p>
+  {gift.claimed ? <p className="notice">✓ Gift already claimed on this account.</p> : <button className="primary" disabled={giftBusy} onClick={() => void claimGift()}>{giftBusy ? "OPENING…" : "OPEN GIFT & CLAIM HD"}</button>}
+  {giftMessage && <p className="notice">{giftMessage}</p>}
+</section>}
+
+{(profile?.role === "admin" || profile?.role === "tester") && <section className="panel" style={{marginTop:24}}>
   <div className="eyebrow">{profile.role === "admin" ? "ADMIN CONTROL" : "TESTER TOOLS"}</div>
+  <h2>🎒 MAX INVENTORY</h2>
+  <p className="muted">Fill your own collection to 99 copies of every active sticker.</p>
+  <button className="primary" onClick={() => void maxInventory()}>SET MY INVENTORY TO 99</button>
+  {maxInventoryMessage && <p className="notice">{maxInventoryMessage}</p>}
   <h2>🎯 Spin Odds Control</h2>
   <p className="muted">Custom odds replace normal, milestone and pity odds while enabled.</p>
   {profile.role === "admin" && <label>APPLY CUSTOM ODDS TO
@@ -257,7 +325,7 @@ async function refreshBoard() {
   </label>}
   <div className="formGrid">
     {(["rare","epic","legendary","secret"] as const).map(key => <label key={key}>{key.toUpperCase()} CHANCE (%)
-      <input type="number" min="0" max="100" step="0.1" value={odds[key]} onChange={e => setOdds(current => ({...current,[key]:e.target.value}))}/>
+      <input type="number" min="0" max="100" step="0.1" value={odds[key]} onChange={e => setOdds((current: { rare: string; epic: string; legendary: string; secret: string }) => ({...current,[key]:e.target.value}))}/>
     </label>)}
   </div>
   <p className="muted">Total: {(Number(odds.rare)+Number(odds.epic)+Number(odds.legendary)+Number(odds.secret)).toFixed(2)}% · Must equal 100%</p>

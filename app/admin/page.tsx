@@ -20,6 +20,16 @@ export default function Admin() {
   const [oddsMode, setOddsMode] = useState("own");
   const [oddsMsg, setOddsMsg] = useState("");
   const [oddsBusy, setOddsBusy] = useState(false);
+  const [prices, setPrices] = useState({ rare: "60", epic: "120", legendary: "240" });
+  const [shopMsg, setShopMsg] = useState("");
+  const [rewardTarget, setRewardTarget] = useState("self");
+  const [rewardAmount, setRewardAmount] = useState("100");
+  const [rewardMsg, setRewardMsg] = useState("");
+  const [giftAmount, setGiftAmount] = useState("500");
+  const [giftMessage, setGiftMessage] = useState("Happy Diwali! 🪔");
+  const [giftStart, setGiftStart] = useState("");
+  const [giftEnd, setGiftEnd] = useState("");
+  const [giftMsg, setGiftMsg] = useState("");
 
   async function loadOdds(mode = oddsMode) {
     const { data, error } = await supabase.rpc("get_my_spin_odds");
@@ -59,6 +69,9 @@ export default function Admin() {
     const { data: playerData, error: playerError } = await supabase.rpc("admin_list_players");
     if (playerError) setMsg(playerError.message); else setPlayers(playerData || []);
     await loadOdds();
+    const { data: shopData, error: shopError } = await supabase.rpc("get_hd_shop_prices");
+    if (shopError) setShopMsg(shopError.message);
+    else if (shopData) setPrices({ rare: String(shopData.rare), epic: String(shopData.epic), legendary: String(shopData.legendary) });
     setLoading(false);
   }
 
@@ -77,6 +90,38 @@ export default function Admin() {
     const result = await response.json();
     if (!response.ok) { setMsg(result.error || "Ban operation failed."); return; }
     setMsg(banned ? `${username} has been banned.` : `${username} has been unbanned.`); await load();
+  }
+
+  async function savePrices() {
+    const values = [Number(prices.rare), Number(prices.epic), Number(prices.legendary)];
+    if (values.some(v => !Number.isInteger(v) || v < 0)) { setShopMsg("Enter whole-number prices of 0 HD or more."); return; }
+    const { data, error } = await supabase.rpc("admin_set_hd_shop_prices", { new_rare: values[0], new_epic: values[1], new_legendary: values[2] });
+    setShopMsg(error ? error.message : `Prices saved: Rare ${data.rare}, Epic ${data.epic}, Legendary ${data.legendary} HD.`);
+  }
+
+  async function rewardHD() {
+    const amount = Number(rewardAmount);
+    if (!Number.isInteger(amount) || amount <= 0) { setRewardMsg("Enter a whole number greater than zero."); return; }
+    const target = rewardTarget === "self" ? (await supabase.auth.getUser()).data.user?.id : rewardTarget;
+    if (!target) { setRewardMsg("Could not identify the selected account."); return; }
+    let targetName = "";
+    if (rewardTarget === "self") {
+      const { data } = await supabase.from("profiles").select("username").eq("id", target).single();
+      targetName = data?.username || "";
+    } else targetName = players.find(p => p.id === target)?.username || "";
+    const { data, error } = await supabase.rpc("admin_reward_hd", { target_username: targetName, reward_amount: amount });
+    setRewardMsg(error ? error.message : `Rewarded ${amount} HD to ${targetName}. New balance: ${data.hd_balance} HD.`);
+  }
+
+  async function sendGift() {
+    if (!giftStart || !giftEnd) { setGiftMsg("Choose both the start and end date/time."); return; }
+    const amount = Number(giftAmount);
+    if (!Number.isInteger(amount) || amount <= 0) { setGiftMsg("Gift amount must be a whole number greater than zero."); return; }
+    const { data, error } = await supabase.rpc("admin_create_hd_gift", {
+      gift_message: giftMessage, gift_amount: amount,
+      gift_starts_at: new Date(giftStart).toISOString(), gift_ends_at: new Date(giftEnd).toISOString()
+    });
+    setGiftMsg(error ? error.message : `Gift created! ${data.amount} HD per player, available until ${new Date(data.ends_at).toLocaleString()}.`);
   }
 
   async function upload() {
@@ -123,6 +168,35 @@ export default function Admin() {
         <button className="ghost" onClick={resetOdds} disabled={oddsBusy}>RESET TO DEFAULT</button>
         {oddsMsg && <p className="notice">{oddsMsg}</p>}
         <p className="tiny">Own Spins affects only your account. All Players applies globally, except players with their own custom odds.</p>
+
+        <h2>💎 HD Shop prices</h2>
+        <p className="muted">These prices apply to every player. Pack contents: 3 Rare, 3 Epic, or 1 Legendary sticker.</p>
+        <div className="formGrid">
+          {(["rare", "epic", "legendary"] as const).map(key => <label key={key}>{key.toUpperCase()} PACK PRICE (HD)
+            <input type="number" min="0" step="1" value={prices[key]} onChange={e => setPrices(p => ({ ...p, [key]: e.target.value }))} />
+          </label>)}
+        </div>
+        <button className="primary" onClick={savePrices}>SAVE SHOP PRICES</button>
+        {shopMsg && <p className="notice">{shopMsg}</p>}
+
+        <h2>🎁 Send an occasion Gift Box</h2>
+        <p className="muted">Every account can claim this fixed HD amount once during the availability window, including accounts registered after you create it.</p>
+        <div className="formGrid">
+          <label>HD PER PLAYER<input type="number" min="1" step="1" value={giftAmount} onChange={e => setGiftAmount(e.target.value)} /></label>
+          <label>GIFT MESSAGE<input value={giftMessage} maxLength={240} onChange={e => setGiftMessage(e.target.value)} /></label>
+          <label>AVAILABLE FROM<input type="datetime-local" value={giftStart} onChange={e => setGiftStart(e.target.value)} /></label>
+          <label>AVAILABLE UNTIL<input type="datetime-local" value={giftEnd} onChange={e => setGiftEnd(e.target.value)} /></label>
+        </div>
+        <button className="primary" onClick={sendGift}>CREATE GIFT BOX FOR EVERYONE</button>
+        {giftMsg && <p className="notice">{giftMsg}</p>}
+
+        <h2>💰 Reward HD to one player</h2>
+        <div className="formGrid">
+          <label>PLAYER<select value={rewardTarget} onChange={e => setRewardTarget(e.target.value)}><option value="self">My own account</option>{players.map(p => <option key={p.id} value={p.id}>{p.username} ({p.role})</option>)}</select></label>
+          <label>HD AMOUNT<input type="number" min="1" step="1" value={rewardAmount} onChange={e => setRewardAmount(e.target.value)} /></label>
+        </div>
+        <button className="primary" onClick={rewardHD}>REWARD HD</button>
+        {rewardMsg && <p className="notice">{rewardMsg}</p>}
 
         <h2>Player management ({players.length})</h2>
         <div className="catalog">{players.map(player => <div className="catalogItem" key={player.id}>
